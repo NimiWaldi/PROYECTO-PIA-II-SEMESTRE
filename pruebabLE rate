@@ -1,0 +1,151 @@
+import machine,bluetooth
+from BLE import BLEUART
+import time
+from time import sleep_ms
+from machine import Pin, Signal, ADC
+import _thread
+
+
+pin33 = machine.Pin(33)        #Se inicializa el PIN33
+adc33 = machine.ADC(pin33)
+
+nombreBluetooth="PruebaOS"
+
+#Instancias de objetos
+ble=bluetooth.BLE()
+buart=BLEUART(ble,nombreBluetooth)
+
+
+led = Signal(Pin(2, Pin.OUT), invert=True)
+
+MAX_HISTORY = 250
+
+# Maintain a log of previous values to
+# determine min, max and threshold.
+history = []
+
+v=0
+
+uart = machine.UART(2, baudrate=9600, bits=8, parity=None, stop=1, timeout=2000)
+uart.init()
+lectura=''
+
+
+def IRQ(pin):
+    global lectura
+    try:
+        if uart.any():
+            lectura = uart.readline()
+            if lectura:
+               print("Lectura del GPS: ", lectura)
+            else:
+               print("No se recibieron datos del GPS")
+        
+    except:
+        print("hola")
+        pass
+        
+machine.Pin(16).irq(IRQ, trigger=machine.Pin.IRQ_FALLING)
+
+
+
+def lectura_GPS():
+    global lectura
+    uart.write(bytearray(b'\xB5\x62\x06\x01\x03\x00\xF0\x00\x00\xFA\x0F')) #GGA
+    lectura=uart.readline()
+    sleep_ms(500)
+    uart.write(bytearray(b'\xB5\x62\x06\x01\x03\x00\xF0\x01\x00\xFB\x11')) #GLL
+    lectura=uart.readline()
+    sleep_ms(500)
+    uart.write(bytearray(b'\xB5\x62\x06\x01\x03\x00\xF0\x02\x00\xFC\x13')) #GSA
+    lectura=uart.readline()
+    sleep_ms(500)
+    uart.write(bytearray(b'\xB5\x62\x06\x01\x03\x00\xF0\x03\x00\xFD\x15')) #GSV
+    lectura=uart.readline()
+    sleep_ms(500)
+    #uart.write(bytearray(b'\xB5\x62\x06\x01\x03\x00\xF0\x04\x00\xFE\x17')) #RMC
+    #lectura=uart.readline()
+    #sleep_ms(100)
+    uart.write(bytearray(b'\xB5\x62\x06\x01\x03\x00\xF0\x05\x00\xFF\x19')) #VTG
+    lectura=uart.readline()
+    sleep_ms(500)
+#     uart.write(bytearray(b'\xB5\x62\x06\x08\x06\x00\xC8\x00\x01\x00\x01\x00\xDE\x6A')) #samplerate 5hz
+#     lectura=uart.readline()
+#     sleep_ms(100)
+    while True:
+         try:
+            if type(lectura) is str:
+                lecturalist=lectura.split(",")
+                if lecturalist[0]=="$GPRMC":
+                    if len(lecturalist[3][:2])>2 and len(lecturalist[5][:3])>2:
+                        latitud=float(lecturalist[3][:2])+(float(lecturalist[3][2:])/60.0)
+                        longitud=-1.0*(float(lecturalist[5][:3])+(float(lecturalist[5][3:])/60.0))
+                        print(latitud,longitud)
+                        
+         except Exception as e:
+            print(e)
+            print("error")
+            
+            pass
+         time.sleep_ms(100)
+        
+
+_thread.start_new_thread(lectura_GPS,())
+        
+
+def lectura_rate():
+    global history,v
+    
+    
+    while True:
+        v = adc33.read()
+
+        history.append(v)
+
+# Get the tail, up to MAX_HISTORY length
+        history = history[-MAX_HISTORY:]
+
+        minima, maxima = min(history), max(history)
+
+        threshold_on = (minima + maxima * 3) // 4   # 3/4
+        threshold_off = (minima + maxima) // 2      # 1/2
+
+        if v > threshold_on:
+            led.on()
+
+        if v < threshold_off:
+            led.off()
+            
+        time.sleep(0.001)
+        
+    
+
+_thread.start_new_thread(lectura_rate,())
+
+
+
+def on_RX():
+    
+    rxbuffer=buart.read().decode().rstrip('\x00')
+    rxbuffer=rxbuffer.replace("\n","")
+    rxbuffer=rxbuffer.replace("\r","")
+    
+    print(rxbuffer)
+    
+def on_Disconect():
+    print("APP Desconectada")
+    
+    
+    
+    
+buart.irq(handler=on_RX)
+buart.discnthandler(handler=on_Disconect)
+    
+
+while True:
+    
+    temp=v
+    buart.write("EMA01 dice: "+str(temp)+"\n")
+    temp=lectura
+    buart.write("EMA01 dice: "+str(temp)+"\n")
+    time.sleep(1)
